@@ -17,7 +17,7 @@ const props = defineProps({
 // Form state
 const form = useForm({
     customer_id: null,
-    purchase_date: new Date().toISOString().slice(0, 10),
+    sale_date: new Date().toISOString().slice(0, 10),
     notes: "",
 });
 
@@ -30,7 +30,7 @@ const payments = ref([]);
 // Search functionality
 const search = ref(props.filters?.search || "");
 watch(search, debounce((value) => {
-    router.get(route("purchases.create"), {search: value}, {
+    router.get(route("sales.create"), {search: value}, {
         preserveState: true,
         replace: true
     });
@@ -69,7 +69,7 @@ const addRow = (product) => {
         name: product.name,
         stock: stock,                                            // ✅ keep stock on the row
         quantity: 1,
-        unit_price: Number(product.buy_price ?? 0),
+        unit_price: Number(product.sell_price ?? 0),
         currency_id: product.currency_id,
         currency_name: product.currency?.name ?? '',
     });
@@ -139,9 +139,13 @@ const paymentMethod = computed(() => {
     return allCovered ? 'cash' : (anyPaid ? 'partial' : 'debt');
 });
 
+const mapPaymentStatus = (pm) => (pm === 'cash' ? 'paid' : pm === 'partial' ? 'partial' : 'unpaid');
+
+
 // Save purchase
 const saveSale = () => {
     const pm = paymentMethod.value;
+    const payment_status = mapPaymentStatus(pm);
     if ((pm === 'partial' || pm === 'debt') && !form.customer_id) {
         showMessage('error', 'بۆ قەرز/نیوەقەرز، ناوی کڕیار هەڵبژێرە.');
         return;
@@ -168,11 +172,11 @@ const saveSale = () => {
 
     const payload = {
         customer_id: form.customer_id || null,
-        purchase_date: form.purchase_date,
+        sale_date: form.sale_date,
         notes: form.notes || null,
-        payment_method: pm,
-        items: JSON.stringify(sale_items),
-        payments: JSON.stringify(paymentsPayload),
+        payment_status,
+        items: sale_items,
+        payments: paymentsPayload,
     };
 
     router.post(route('sales.store'), payload, {
@@ -222,7 +226,7 @@ watch(rows, (newRows) => {
             <input type="search" class="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                    placeholder="گەڕان بەپێی ناو یان کۆد ..." v-model="search"
             />
-            <Link :href="route('purchases.index')" class="primary-btn">
+            <Link :href="route('sales.index')" class="primary-btn">
                 <span>گەڕانەوە</span>
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 15.75 3 12m0 0 3.75-3.75M3 12h18"/>
@@ -238,7 +242,7 @@ watch(rows, (newRows) => {
                     <div class="space-y-2 flex-grow">
                         <h5 class="text-xl dark:text-white">
                             نرخی فرۆشتن /
-                            <span class="text-red-500">{{ formatNumber(product.buy_price ?? 0) }}</span>
+                            <span class="text-red-500">{{ formatNumber(product.sell_price ?? 0) }}</span>
                             <span class="text-xs ms-1 ">{{ product.currency?.name }}</span>
                         </h5>
                         <p class="font-medium dark:text-white">{{ product.name }}</p>
@@ -265,7 +269,7 @@ watch(rows, (newRows) => {
 
         <!-- Pagination -->
         <div class="mt-3">
-            <PaginationLinks :paginator="products"/>
+            <PaginationLinks :paginator="props.products"/>
         </div>
         <hr class="my-5 dark:text-white"/>
 
@@ -281,7 +285,7 @@ watch(rows, (newRows) => {
                 </div>
 
                 <!-- Date -->
-                <TextInput v-model="form.purchase_date" name="ڕێکەوت" type="date"/>
+                <TextInput v-model="form.sale_date" name="ڕێکەوت" type="date"/>
 
                 <!-- Notes -->
                 <TextInput v-model="form.notes" name="تێبینی" class="xl:col-span-2"/>
@@ -391,7 +395,7 @@ watch(rows, (newRows) => {
                         </td>
                         <td class="text-center">
                             <input type="number" min="0.1" step="0.1" :max="item.stock"
-                                   class="w-24 p-2  text-center border border-gray-300 rounded" v-model.number="item.quantity"/>
+                                   class="w-24 p-2 text-center border border-gray-300 rounded" v-model.number="item.quantity" @input="item.quantity = Math.min(item.stock, Math.max(0, Number(item.quantity) || 0))"/>
                         </td>
                         <td class="font-semibold">
                             {{ item.quantity && item.unit_price ? formatNumber(item.quantity * item.unit_price) : 0 }}

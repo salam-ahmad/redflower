@@ -27,15 +27,15 @@ class SaleController extends Controller
                     });
             })
             ->when($request->date_from, function ($query, $date) {
-                $query->whereDate('date', '>=', $date);
+                $query->whereDate('sale_date', '>=', $date);
             })
             ->when($request->date_to, function ($query, $date) {
-                $query->whereDate('date', '<=', $date);
+                $query->whereDate('sale_date', '<=', $date);
             })
             ->when($request->customer_id, function ($query, $customerId) {
                 $query->where('customer_id', $customerId);
             })
-            ->orderBy('date', 'desc')
+            ->orderBy('sale_date', 'desc')
             ->paginate(20)
             ->withQueryString();
 
@@ -97,18 +97,17 @@ class SaleController extends Controller
     {
         $validated = $request->validate([
             'customer_id' => 'required|exists:customers,id',
-            'date' => 'required|date',
-            'note' => 'nullable|string',
+            'sale_date' => 'required|date',
+            'notes' => 'nullable|string',
+            'payment_status' => 'nullable|string',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.quantity' => 'required|numeric|min:0.01',
             'items.*.unit_price' => 'required|numeric|min:0',
             'items.*.currency_id' => 'required|exists:currencies,id',
-            'items.*.note' => 'nullable|string'
+            'payments' => 'nullable|array',
         ]);
-
-        $validated['created_by_id'] = auth()->id();
-
+        $validated['created_by'] = auth()->id();
         // Calculate total
         $total = collect($validated['items'])->sum(function ($item) {
             return $item['quantity'] * $item['unit_price'];
