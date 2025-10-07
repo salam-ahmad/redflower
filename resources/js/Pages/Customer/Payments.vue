@@ -1,0 +1,96 @@
+<script setup>
+import { Link, router } from '@inertiajs/vue3'
+
+const props = defineProps({
+    customer: { type: Object, required: true },
+    payments: { type: Object, required: true },
+    filters:  { type: Object, default: () => ({ from: null, to: null }) },
+    totals_by_currency: { type: Array, required: true }, // [{currency_id,currency_name,total}]
+})
+
+const submit = (e) => {
+    e.preventDefault()
+    const f = new FormData(e.target)
+    router.get(route('customers.payments', props.customer.id), {
+        from: f.get('from') || null,
+        to:   f.get('to')   || null
+    }, { preserveScroll: true })
+}
+
+const fmt = (n, digits = 4) =>
+    Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: digits })
+</script>
+
+<template>
+    <div class="p-4 container mx-auto space-y-4">
+        <h1 class="text-xl font-bold mb-4">
+            پارەی وەرگیراو — <span class="text-red-500">{{ customer.name }}</span>
+        </h1>
+
+        <form @submit="submit" class="flex gap-4 items-end bg-white border rounded p-4 dark:bg-gray-800">
+            <div>
+                <label class="dark:text-white text-base">لە ڕێکەوتی</label>
+                <input name="from" type="date" :value="filters.from" class="border rounded px-4 py-2">
+            </div>
+            <div>
+                <label class="dark:text-white text-base">بۆ ڕێکەوتی</label>
+                <input name="to" type="date" :value="filters.to" class="border rounded px-4 py-2">
+            </div>
+            <button class="primary-btn py-2 px-4">
+                <span>گەڕان</span>
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/>
+                </svg>
+            </button>
+        </form>
+
+        <!-- Totals per currency -->
+        <div class="grid grid-cols-1 my-2">
+            <div class="bg-white border rounded py-5 px-4 dark:bg-gray-800 dark:border-blue-200">
+                <p class="text-xl dark:text-white">کۆی پارەی وەرگیراو بەپێی دراو</p>
+                <div class="flex flex-wrap gap-2 mt-2">
+          <span v-for="t in totals_by_currency" :key="t.currency_id"
+                class="inline-flex items-center gap-2 border rounded px-2 py-1 text-sm">
+            <strong>{{ t.currency_name }}</strong>
+            <span>{{ fmt(t.total) }}</span>
+          </span>
+                    <span v-if="!totals_by_currency.length" class="text-gray-500">—</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="overflow-auto bg-white border rounded dark:bg-transparent dark:border-gray-200">
+            <table>
+                <thead>
+                <tr>
+                    <th>#</th>
+                    <th>ڕێکەوتی پارەدان</th>
+                    <th>بڕی پارە</th>
+                    <th>جۆری دراو</th>
+                    <th>تێبینی</th>
+                    <th>ژ.پسوڵەی فرۆشتن</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr v-for="p in payments.data" :key="p.id">
+                    <td>#{{ p.id }}</td>
+                    <td>{{ p.date }}</td>
+                    <td>{{ fmt(p.amount) }}</td>
+                    <td class="text-xs">{{ p.currency_name }}</td>
+                    <td>{{ p.note || '—' }}</td>
+                    <td>#{{ p.order_id }} ({{ p.order_date }})</td>
+                    <td>
+                        <Link :href="p.order_url" class="table_btn">پسوڵەی فرۆشتن</Link>
+                    </td>
+                </tr>
+                <tr v-if="payments.data.length === 0">
+                    <td colspan="7" class="p-3 text-center text-gray-500">هیچ نەدۆزرایەوە</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- optional pagination -->
+    </div>
+</template>

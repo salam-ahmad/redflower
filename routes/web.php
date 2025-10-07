@@ -16,12 +16,14 @@ use App\Http\Controllers\Supplier\SupplierController;
 use App\Http\Controllers\User\UserController;
 use App\Http\Controllers\Welcome\WelcomeController;
 use Illuminate\Support\Facades\Route;
+use Inertia\Inertia;
 
-Route::get('/', function () {
-    return view('app');
-});
 
 Route::middleware(['auth'])->group(function () {
+    Route::get('/', function () {
+        return Inertia::render('Home/Index');
+    })->name('home');
+
     Route::get('dashboard', [DashboardController::class, 'index'])->name('dashboard');
     // Currency Management
     Route::resource('currencies', CurrencyController::class);
@@ -56,6 +58,34 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/users/{user}', [UserController::class, 'edit'])->name('users.edit');
     Route::put('/users/{user}', [UserController::class, 'update'])->name('users.update');
     Route::resource('setting', SettingController::class)->names('settings');
+
+    // ==========================================
+// Customer Payment Routes
+// ==========================================
+//    Route::resource('customer-payments', CustomerPaymentController::class);
+
+// Create payment for specific sale
+//    Route::get('sales/{sale}/payments/create', [CustomerPaymentController::class, 'createForSale'])->name('sales.payments.create');
+
+// ==========================================
+// Supplier Payment Routes
+// ==========================================
+//    Route::resource('supplier-payments', SupplierPaymentController::class);
+
+// Create payment for specific purchase
+//    Route::get('purchases/{purchase}/payments/create', [SupplierPaymentController::class, 'createForPurchase'])->name('purchases.payments.create');
+
+// ==========================================
+// Purchase & Sale Routes (existing)
+// ==========================================
+//    Route::resource('purchases', PurchaseController::class);
+//    Route::resource('sales', SaleController::class);
+
+// View customer's sales
+//    Route::get('customers/{customer}/sales', [SaleController::class, 'indexByCustomer'])->name('customers.sales');
+
+// View supplier's purchases
+//    Route::get('suppliers/{supplier}/purchases', [PurchaseController::class, 'indexBySupplier'])->name('suppliers.purchases');
 
 });
 Route::middleware('guest')->group(function () {
