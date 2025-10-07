@@ -76,6 +76,7 @@ onMounted(() => {
                         <!--v-if="hasPermission('order_list')"-->
                         <!--v-if="hasPermission('purchase_list')"-->
                         <Link :href="route('purchases.index')" class="link" :class="{'active_link': $page.component.startsWith('Purchase')}" @click="closeSidebar"> کڕین</Link>
+                        <Link :href="route('sales.index')" class="link" :class="{'active_link': $page.component.startsWith('Sales')}" @click="closeSidebar"> فرۆشتن</Link>
                         <!--                        <Link :href="route('units.index')" class="link" :class="{'active_link': $page.component.startsWith('Unit')}" @click="closeSidebar"> پێوانەکان</Link>-->
                         <Link :href="route('currencies.index')" class="link" :class="{'active_link': $page.component.startsWith('Currency')}" @click="closeSidebar"> دراو</Link>
                         <Link :href="route('users.index')" class="link" :class="{'active_link': $page.component.startsWith('User')}" @click="closeSidebar">

@@ -41,10 +41,8 @@ Route::middleware(['auth'])->group(function () {
     Route::resource('sales', SaleController::class);
     // Supplier Payments
     Route::resource('supplier-payments', SupplierPaymentController::class);
-    Route::get('/api/unpaid-purchases', [SupplierPaymentController::class, 'getUnpaidPurchases'])->name('api.unpaid-purchases');
     // Customer Payments
     Route::resource('customer-payments', CustomerPaymentController::class);
-    Route::get('/api/unpaid-sales', [CustomerPaymentController::class, 'getUnpaidSales'])->name('api.unpaid-sales');
     Route::get('/edit_password', [AuthController::class, 'editPassword'])->name('edit_password');
     Route::put('/updatePassword', [AuthController::class, 'updatePassword'])->name('updatePassword');
 
@@ -59,33 +57,21 @@ Route::middleware(['auth'])->group(function () {
     Route::put('/users/{user}', [UserController::class, 'update'])->name('users.update');
     Route::resource('setting', SettingController::class)->names('settings');
 
-    // ==========================================
-// Customer Payment Routes
-// ==========================================
-//    Route::resource('customer-payments', CustomerPaymentController::class);
+    // Route to pay for a specific purchase (create supplier payment)
+    Route::get('purchases/{purchase}/pay', [SupplierPaymentController::class, 'createForPurchase'])->name('purchases.pay');
 
-// Create payment for specific sale
-//    Route::get('sales/{sale}/payments/create', [CustomerPaymentController::class, 'createForSale'])->name('sales.payments.create');
-
-// ==========================================
 // Supplier Payment Routes
-// ==========================================
-//    Route::resource('supplier-payments', SupplierPaymentController::class);
-
-// Create payment for specific purchase
-//    Route::get('purchases/{purchase}/payments/create', [SupplierPaymentController::class, 'createForPurchase'])->name('purchases.payments.create');
-
-// ==========================================
-// Purchase & Sale Routes (existing)
-// ==========================================
-//    Route::resource('purchases', PurchaseController::class);
-//    Route::resource('sales', SaleController::class);
-
-// View customer's sales
-//    Route::get('customers/{customer}/sales', [SaleController::class, 'indexByCustomer'])->name('customers.sales');
-
-// View supplier's purchases
-//    Route::get('suppliers/{supplier}/purchases', [PurchaseController::class, 'indexBySupplier'])->name('suppliers.purchases');
+    Route::resource('supplier-payments', SupplierPaymentController::class);
+    Route::get('sales/{sale}/receive-payment', [CustomerPaymentController::class, 'createForSale'])->name('sales.receive-payment');
+    Route::resource('customer-payments', CustomerPaymentController::class);
+// Get all payments for a specific customer
+    Route::get('customers/{customer}/payments', [CustomerPaymentController::class, 'customerPayments'])->name('customers.payments');
+// Get all payments for a specific supplier
+    Route::get('suppliers/{supplier}/payments', [SupplierPaymentController::class, 'supplierPayments'])->name('suppliers.payments');
+// Get all purchases for a specific supplier
+    Route::get('suppliers/{supplier}/purchases', [PurchaseController::class, 'supplierPurchases'])->name('suppliers.purchases');
+// Get all sales for a specific customer
+    Route::get('customers/{customer}/sales', [SaleController::class, 'customerSales'])->name('customers.sales');
 
 });
 Route::middleware('guest')->group(function () {

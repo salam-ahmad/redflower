@@ -3,167 +3,252 @@
 namespace App\Http\Controllers\Payment;
 
 use App\Http\Controllers\Controller;
-use App\Models\CustomerPayment;
-use App\Models\Customer;
 use App\Models\Sale;
+use App\Models\CustomerPayment;
 use App\Models\Currency;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
-use Inertia\Response;
 
 class CustomerPaymentController extends Controller
 {
-    public function index(Request $request): Response
+    /**
+     * Display a listing of customer payments
+     */
+    public function index(Request $request)
     {
-        $payments = CustomerPayment::query()
-            ->with(['customer', 'sale', 'currency', 'createdBy'])
+        $payments = CustomerPayment::with(['customer', 'currency', 'sale'])
             ->when($request->search, function ($query, $search) {
                 $query->whereHas('customer', function ($q) use ($search) {
                     $q->where('name', 'like', "%{$search}%");
-                })
-                    ->orWhereHas('sale', function ($q) use ($search) {
-                        $q->where('sale_number', 'like', "%{$search}%");
-                    });
+                });
             })
-            ->when($request->customer_id, function ($query, $customerId) {
-                $query->where('customer_id', $customerId);
+            ->when($request->date_from, function ($query, $date) {
+                $query->whereDate('paid_at', '>=', $date);
             })
-            ->orderByDesc('payment_date')
-            ->paginate(15)
+            ->when($request->date_to, function ($query, $date) {
+                $query->whereDate('paid_at', '<=', $date);
+            })
+            ->orderBy('paid_at', 'desc')
+            ->paginate(20)
             ->withQueryString();
-
-        $customers = Customer::orderBy('name')->get();
 
         return Inertia::render('Payment/CustomerPayment/Index', [
             'payments' => $payments,
-            'customers' => $customers,
-            'filters' => $request->only(['search', 'customer_id']),
+            'filters' => $request->only(['search', 'date_from', 'date_to'])
         ]);
     }
 
-    public function create(Request $request): Response
+    /**
+     * Show the form for creating a new customer payment
+     */
+    public function create()
     {
-        $customers = Customer::where('is_active', true)->orderBy('name')->get();
-        $currencies = Currency::where('is_active', true)->get();
+        return Inertia::render('Payment/CustomerPayment/Create', [
+            'customers' => \App\Models\Customer::select('id', 'name', 'due_amount')->get(),
+            'currencies' => Currency::all(),
+            'sales' => Sale::with('customer')
+                ->where('due_amount', '>', 0)
+                ->get(),
+            'paymentMethods' => ['نەقد', 'کارتی بانکی', 'چێک', 'هاوردە']
+        ]);
+    }
 
-        $sales = [];
-        if ($request->customer_id) {
-            $sales = Sale::where('customer_id', $request->customer_id)
-                ->whereIn('payment_status', ['unpaid', 'partial'])
-                ->with(['items.currency'])
-                ->orderByDesc('sale_date')
-                ->get()
-                ->map(function ($sale) {
-                    return [
-                        'id' => $sale->id,
-                        'sale_number' => $sale->sale_number,
-                        'sale_date' => $sale->sale_date,
-                        'remaining_debt' => $sale->remainingDebt(),
-                    ];
-                });
-        }
+    /**
+     * Show the form for creating a payment for a specific sale
+     */
+    public function createForSale(Sale $sale)
+    {
+        $sale->load(['customer', 'items.currency']);
 
         return Inertia::render('Payment/CustomerPayment/Create', [
-            'customers' => $customers,
-            'currencies' => $currencies,
-            'sales' => $sales,
-            'selectedCustomerId' => $request->customer_id,
+            'customers' => \App\Models\Customer::select('id', 'name', 'due_amount')->get(),
+            'currencies' => Currency::all(),
+            'sales' => Sale::where('customer_id', $sale->customer_id)
+                ->where('due_amount', '>', 0)
+                ->get(),
+            'paymentMethods' => ['نەقد', 'کارتی بانکی', 'چێک', 'هاوردە'],
+            'preselectedSale' => $sale,
+            'preselectedCustomer' => $sale->customer
         ]);
     }
 
+    /**
+     * Store a newly created customer payment
+     */
     public function store(Request $request)
     {
         $validated = $request->validate([
             'customer_id' => 'required|exists:customers,id',
-            'sale_id' => 'required|exists:sales,id',
-            'amount' => 'required|numeric|min:0.1',
+            'sale_id' => 'nullable|exists:sales,id',
+            'amount' => 'required|numeric|min:0',
             'currency_id' => 'required|exists:currencies,id',
-            'payment_date' => 'required|date',
-            'notes' => 'nullable|string',
+            'paid_at' => 'required|date',
+            'payment_method' => 'nullable|string',
+            'note' => 'nullable|string'
         ]);
 
-        // Verify sale belongs to customer
-        $sale = Sale::findOrFail($validated['sale_id']);
-        if ($sale->customer_id != $validated['customer_id']) {
-            return back()->withErrors(['sale_id' => 'This sale does not belong to the selected customer.']);
+        $validated['created_by_id'] = auth()->id();
+
+        $payment = CustomerPayment::create($validated);
+
+        // Update sale paid amount if linked to specific sale
+        if ($payment->sale_id) {
+            $this->updateSaleBalance($payment->sale_id);
         }
 
-        CustomerPayment::create([
-            'customer_id' => $validated['customer_id'],
-            'sale_id' => $validated['sale_id'],
-            'amount' => $validated['amount'],
-            'currency_id' => $validated['currency_id'],
-            'payment_date' => $validated['payment_date'],
-            'notes' => $validated['notes'] ?? null,
-            'created_by' => auth()->id(),
-        ]);
+        // Update customer balance
+        $this->updateCustomerBalance($payment->customer_id);
+
+        if ($request->has('redirect_to_sale') && $payment->sale_id) {
+            return redirect()->route('sales.show', $payment->sale_id)
+                ->with('success', 'پارەوەرگرتن بە سەرکەوتوویی زیادکرا');
+        }
 
         return redirect()->route('customer-payments.index')
-            ->with('success', 'Payment recorded successfully.');
+            ->with('success', 'پارەوەرگرتن بە سەرکەوتوویی زیادکرا');
     }
 
-    public function show(CustomerPayment $customerPayment): Response
+    /**
+     * Display the specified customer payment
+     */
+    public function show(CustomerPayment $customerPayment)
     {
-        $customerPayment->load(['customer', 'sale.items.currency', 'currency', 'createdBy']);
+        $customerPayment->load([
+            'customer',
+            'currency',
+            'sale',
+            'created_by'
+        ]);
 
         return Inertia::render('Payment/CustomerPayment/Show', [
-            'payment' => $customerPayment,
+            'payment' => $customerPayment
         ]);
     }
 
-    public function edit(CustomerPayment $customerPayment): Response
+    /**
+     * Show the form for editing the specified customer payment
+     */
+    public function edit(CustomerPayment $customerPayment)
     {
-        $customerPayment->load(['customer', 'sale']);
-        $currencies = Currency::where('is_active', true)->get();
-
         return Inertia::render('Payment/CustomerPayment/Edit', [
             'payment' => $customerPayment,
-            'currencies' => $currencies,
+            'customers' => \App\Models\Customer::select('id', 'name', 'due_amount')->get(),
+            'currencies' => Currency::all(),
+            'sales' => Sale::where('customer_id', $customerPayment->customer_id)
+                ->where('due_amount', '>', 0)
+                ->orWhere('id', $customerPayment->sale_id)
+                ->get(),
+            'paymentMethods' => ['نەقد', 'کارتی بانکی', 'چێک', 'هاوردە']
         ]);
     }
 
+    /**
+     * Update the specified customer payment
+     */
     public function update(Request $request, CustomerPayment $customerPayment)
     {
         $validated = $request->validate([
-            'amount' => 'required|numeric|min:0.1',
+            'customer_id' => 'required|exists:customers,id',
+            'sale_id' => 'nullable|exists:sales,id',
+            'amount' => 'required|numeric|min:0',
             'currency_id' => 'required|exists:currencies,id',
-            'payment_date' => 'required|date',
-            'notes' => 'nullable|string',
+            'paid_at' => 'required|date',
+            'payment_method' => 'nullable|string',
+            'note' => 'nullable|string'
         ]);
+
+        $oldSaleId = $customerPayment->sale_id;
+        $oldCustomerId = $customerPayment->customer_id;
 
         $customerPayment->update($validated);
 
-        return redirect()->route('customer-payments.index')
-            ->with('success', 'Payment updated successfully.');
+        // Update balances for old and new sales if changed
+        if ($oldSaleId != $customerPayment->sale_id) {
+            if ($oldSaleId) {
+                $this->updateSaleBalance($oldSaleId);
+            }
+            if ($customerPayment->sale_id) {
+                $this->updateSaleBalance($customerPayment->sale_id);
+            }
+        } else if ($customerPayment->sale_id) {
+            $this->updateSaleBalance($customerPayment->sale_id);
+        }
+
+        // Update customer balances
+        if ($oldCustomerId != $customerPayment->customer_id) {
+            $this->updateCustomerBalance($oldCustomerId);
+            $this->updateCustomerBalance($customerPayment->customer_id);
+        } else {
+            $this->updateCustomerBalance($customerPayment->customer_id);
+        }
+
+        return redirect()->route('customer-payments.show', $customerPayment)
+            ->with('success', 'پارەوەرگرتن بە سەرکەوتوویی نوێکرایەوە');
     }
 
+    /**
+     * Remove the specified customer payment
+     */
     public function destroy(CustomerPayment $customerPayment)
     {
+        $saleId = $customerPayment->sale_id;
+        $customerId = $customerPayment->customer_id;
+
         $customerPayment->delete();
 
+        // Update balances
+        if ($saleId) {
+            $this->updateSaleBalance($saleId);
+        }
+        $this->updateCustomerBalance($customerId);
+
         return redirect()->route('customer-payments.index')
-            ->with('success', 'Payment deleted successfully.');
+            ->with('success', 'پارەوەرگرتن بە سەرکەوتوویی سڕایەوە');
     }
 
-    // Get unpaid sales for a customer (AJAX endpoint)
-    public function getUnpaidSales(Request $request)
+    /**
+     * Get all payments for a specific customer
+     */
+    public function customerPayments(\App\Models\Customer $customer)
     {
-        $customerId = $request->customer_id;
+        $payments = CustomerPayment::where('customer_id', $customer->id)
+            ->with(['currency', 'sale'])
+            ->orderBy('paid_at', 'desc')
+            ->paginate(20);
 
-        $sales = Sale::where('customer_id', $customerId)
-            ->whereIn('payment_status', ['unpaid', 'partial'])
-            ->with(['items.currency'])
-            ->orderByDesc('sale_date')
-            ->get()
-            ->map(function ($sale) {
-                return [
-                    'id' => $sale->id,
-                    'sale_number' => $sale->sale_number,
-                    'sale_date' => $sale->sale_date->format('Y-m-d'),
-                    'remaining_debt' => $sale->remainingDebt(),
-                ];
-            });
+        return Inertia::render('Payment/CustomerPayment/Index', [
+            'payments' => $payments,
+            'customer' => $customer,
+            'filters' => ['customer_id' => $customer->id]
+        ]);
+    }
 
-        return response()->json($sales);
+    /**
+     * Update sale balance based on payments
+     */
+    private function updateSaleBalance($saleId)
+    {
+        $sale = Sale::findOrFail($saleId);
+        $totalPaid = CustomerPayment::where('sale_id', $saleId)->sum('amount');
+
+        $sale->update([
+            'paid_amount' => $totalPaid,
+            'due_amount' => $sale->total - $totalPaid
+        ]);
+    }
+
+    /**
+     * Update customer balance based on all their sales and payments
+     */
+    private function updateCustomerBalance($customerId)
+    {
+        $customer = \App\Models\Customer::findOrFail($customerId);
+
+        $totalSales = Sale::where('customer_id', $customerId)->sum('total');
+        $totalPaid = CustomerPayment::where('customer_id', $customerId)->sum('amount');
+
+        $customer->update([
+            'due_amount' => $totalSales - $totalPaid
+        ]);
     }
 }

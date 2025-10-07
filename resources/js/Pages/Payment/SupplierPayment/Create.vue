@@ -1,6 +1,6 @@
 <script setup>
 import { useForm, Link } from '@inertiajs/vue3'
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 
 const props = defineProps({
     suppliers: {
@@ -18,6 +18,14 @@ const props = defineProps({
     paymentMethods: {
         type: Array,
         default: () => ['نەقد', 'کارتی بانکی', 'چێک', 'هاوردە']
+    },
+    preselectedPurchase: {
+        type: Object,
+        default: null
+    },
+    preselectedSupplier: {
+        type: Object,
+        default: null
     }
 })
 
@@ -28,11 +36,48 @@ const form = useForm({
     currency_id: null,
     paid_at: new Date().toISOString().split('T')[0],
     payment_method: 'نەقد',
-    note: ''
+    note: '',
+    redirect_to_purchase: false
 })
 
 const selectedSupplier = ref(null)
 const supplierPurchases = ref([])
+
+const formatNumber = (number) => {
+    return Number(number || 0).toLocaleString()
+}
+
+// Initialize with preselected data
+onMounted(() => {
+    if (props.preselectedSupplier) {
+        form.supplier_id = props.preselectedSupplier.id
+        selectedSupplier.value = props.preselectedSupplier
+    }
+
+    if (props.preselectedPurchase) {
+        form.purchase_id = props.preselectedPurchase.id
+        form.supplier_id = props.preselectedPurchase.supplier_id
+
+        // Pre-fill amount with due amount
+        if (props.preselectedPurchase.due_amount) {
+            form.amount = props.preselectedPurchase.due_amount
+        }
+
+        // Pre-fill currency if purchase has items with currency
+        if (props.preselectedPurchase.items && props.preselectedPurchase.items.length > 0) {
+            const firstItemCurrency = props.preselectedPurchase.items[0].currency_id
+            if (firstItemCurrency) {
+                form.currency_id = firstItemCurrency
+            }
+        }
+
+        // Set redirect flag
+        form.redirect_to_purchase = true
+
+        // Load purchases for this supplier
+        supplierPurchases.value = props.purchases.filter(p => p.supplier_id === props.preselectedPurchase.supplier_id)
+    }
+})
 
 // Watch for supplier selection to load their purchases
 watch(() => form.supplier_id, (supplierId) => {
@@ -40,7 +85,11 @@ watch(() => form.supplier_id, (supplierId) => {
         selectedSupplier.value = props.suppliers.find(s => s.id === supplierId)
         // Filter purchases for selected supplier
         supplierPurchases.value = props.purchases.filter(p => p.supplier_id === supplierId)
-        form.purchase_id = null
+
+        // Only reset purchase_id if not preselected
+        if (!props.preselectedPurchase) {
+            form.purchase_id = null
+        }
     } else {
         selectedSupplier.value = null
         supplierPurchases.value = []
@@ -67,6 +116,28 @@ const submit = () => {
 
         <!-- Form -->
         <form @submit.prevent="submit" class="bg-white dark:bg-gray-800 border rounded p-6 space-y-6">
+            <!-- Purchase Context Banner -->
+            <div
+                v-if="preselectedPurchase"
+                class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded p-4"
+            >
+                <div class="flex items-start gap-3">
+                    <svg class="w-6 h-6 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    <div class="flex-1">
+                        <h3 class="font-semibold text-blue-900 dark:text-blue-100 mb-1">
+                            پارەدان بۆ پسوڵەی کڕین #{{ preselectedPurchase.id }}
+                        </h3>
+                        <div class="text-sm text-blue-800 dark:text-blue-200 space-y-1">
+                            <p>فرۆشیار: <span class="font-medium">{{ preselectedPurchase.supplier?.name }}</span></p>
+                            <p>کۆی گشتی: <span class="font-medium">{{ formatNumber(preselectedPurchase.total) }}</span></p>
+                            <p>بڕی قەرز: <span class="font-semibold text-red-600">{{ formatNumber(preselectedPurchase.due_amount) }}</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Supplier Selection -->
             <div class="grid md:grid-cols-2 gap-6">
                 <div>

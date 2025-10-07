@@ -249,22 +249,15 @@ class PurchaseController extends Controller
 
     public function show(Purchase $purchase)
     {
-        // Load relationships
+        // Load all necessary relationships
         $purchase->load([
             'supplier',
             'items.product',
             'items.currency',
             'payments' => function ($query) {
-                $query->orderBy('created_at', 'desc');
+                $query->with('currency')->orderBy('paid_at', 'desc');
             }
         ]);
-
-        // Add dynamic URLs
-//        $purchase->pay_url = route('purchases.payments.create', $purchase);
-//
-//        if ($purchase->supplier) {
-//            $purchase->supplier->purchases_url = route('suppliers.purchases', $purchase->supplier);
-//        }
 
         return Inertia::render('Purchase/Show', [
             'purchase' => $purchase
@@ -359,5 +352,22 @@ class PurchaseController extends Controller
             return redirect()->route('purchases.index')
                 ->with('error', 'ناتوانرێت کڕینەکە بسڕێتەوە. تۆمارەکانی پەیوەندیدار هەن.');
         }
+    }
+
+    /**
+     * Get all purchases for a specific supplier
+     */
+    public function supplierPurchases(\App\Models\Supplier $supplier)
+    {
+        $purchases = Purchase::where('supplier_id', $supplier->id)
+            ->with(['items', 'payments'])
+            ->orderBy('date', 'desc')
+            ->paginate(20);
+
+        return Inertia::render('Purchase/Index', [
+            'purchases' => $purchases,
+            'supplier' => $supplier,
+            'filters' => ['supplier_id' => $supplier->id]
+        ]);
     }
 }

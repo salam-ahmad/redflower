@@ -1,6 +1,6 @@
 <script setup>
 import { useForm, Link } from '@inertiajs/vue3'
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 
 const props = defineProps({
     customers: {
@@ -18,6 +18,14 @@ const props = defineProps({
     paymentMethods: {
         type: Array,
         default: () => ['نەقد', 'کارتی بانکی', 'چێک', 'هاوردە']
+    },
+    preselectedSale: {
+        type: Object,
+        default: null
+    },
+    preselectedCustomer: {
+        type: Object,
+        default: null
     }
 })
 
@@ -28,11 +36,48 @@ const form = useForm({
     currency_id: null,
     paid_at: new Date().toISOString().split('T')[0],
     payment_method: 'نەقد',
-    note: ''
+    note: '',
+    redirect_to_sale: false
 })
 
 const selectedCustomer = ref(null)
 const customerSales = ref([])
+
+const formatNumber = (number) => {
+    return Number(number || 0).toLocaleString()
+}
+
+// Initialize with preselected data
+onMounted(() => {
+    if (props.preselectedCustomer) {
+        form.customer_id = props.preselectedCustomer.id
+        selectedCustomer.value = props.preselectedCustomer
+    }
+
+    if (props.preselectedSale) {
+        form.sale_id = props.preselectedSale.id
+        form.customer_id = props.preselectedSale.customer_id
+
+        // Pre-fill amount with due amount
+        if (props.preselectedSale.due_amount) {
+            form.amount = props.preselectedSale.due_amount
+        }
+
+        // Pre-fill currency if sale has items with currency
+        if (props.preselectedSale.items && props.preselectedSale.items.length > 0) {
+            const firstItemCurrency = props.preselectedSale.items[0].currency_id
+            if (firstItemCurrency) {
+                form.currency_id = firstItemCurrency
+            }
+        }
+
+        // Set redirect flag
+        form.redirect_to_sale = true
+
+        // Load sales for this customer
+        customerSales.value = props.sales.filter(s => s.customer_id === props.preselectedSale.customer_id)
+    }
+})
 
 // Watch for customer selection to load their sales
 watch(() => form.customer_id, (customerId) => {
@@ -40,7 +85,11 @@ watch(() => form.customer_id, (customerId) => {
         selectedCustomer.value = props.customers.find(c => c.id === customerId)
         // Filter sales for selected customer
         customerSales.value = props.sales.filter(s => s.customer_id === customerId)
-        form.sale_id = null
+
+        // Only reset sale_id if not preselected
+        if (!props.preselectedSale) {
+            form.sale_id = null
+        }
     } else {
         selectedCustomer.value = null
         customerSales.value = []
@@ -67,6 +116,28 @@ const submit = () => {
 
         <!-- Form -->
         <form @submit.prevent="submit" class="bg-white dark:bg-gray-800 border rounded p-6 space-y-6">
+            <!-- Sale Context Banner -->
+            <div
+                v-if="preselectedSale"
+                class="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded p-4"
+            >
+                <div class="flex items-start gap-3">
+                    <svg class="w-6 h-6 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    <div class="flex-1">
+                        <h3 class="font-semibold text-green-900 dark:text-green-100 mb-1">
+                            وەرگرتنی پارە بۆ پسوڵەی فرۆشتن #{{ preselectedSale.id }}
+                        </h3>
+                        <div class="text-sm text-green-800 dark:text-green-200 space-y-1">
+                            <p>کڕیار: <span class="font-medium">{{ preselectedSale.customer?.name }}</span></p>
+                            <p>کۆی گشتی: <span class="font-medium">{{ formatNumber(preselectedSale.total) }}</span></p>
+                            <p>بڕی قەرز: <span class="font-semibold text-red-600">{{ formatNumber(preselectedSale.due_amount) }}</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Customer Selection -->
             <div class="grid md:grid-cols-2 gap-6">
                 <div>

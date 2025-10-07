@@ -3,167 +3,257 @@
 namespace App\Http\Controllers\Payment;
 
 use App\Http\Controllers\Controller;
-use App\Models\SupplierPayment;
-use App\Models\Supplier;
 use App\Models\Purchase;
+use App\Models\SupplierPayment;
 use App\Models\Currency;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
-use Inertia\Response;
 
 class SupplierPaymentController extends Controller
 {
-    public function index(Request $request): Response
+    /**
+     * Display a listing of supplier payments
+     */
+    public function index(Request $request)
     {
-        $payments = SupplierPayment::query()
-            ->with(['supplier', 'purchase', 'currency', 'createdBy'])
+        $payments = SupplierPayment::with(['supplier', 'currency', 'purchase'])
             ->when($request->search, function ($query, $search) {
                 $query->whereHas('supplier', function ($q) use ($search) {
                     $q->where('name', 'like', "%{$search}%");
-                })
-                    ->orWhereHas('purchase', function ($q) use ($search) {
-                        $q->where('purchase_number', 'like', "%{$search}%");
-                    });
+                });
             })
-            ->when($request->supplier_id, function ($query, $supplierId) {
-                $query->where('supplier_id', $supplierId);
+            ->when($request->date_from, function ($query, $date) {
+                $query->whereDate('paid_at', '>=', $date);
             })
-            ->orderByDesc('payment_date')
-            ->paginate(15)
+            ->when($request->date_to, function ($query, $date) {
+                $query->whereDate('paid_at', '<=', $date);
+            })
+            ->orderBy('paid_at', 'desc')
+            ->paginate(20)
             ->withQueryString();
 
-        $suppliers = Supplier::orderBy('name')->get();
+        // Add meta information
+        $payments->getCollection()->transform(function ($payment) {
+            return $payment;
+        });
 
         return Inertia::render('Payment/SupplierPayment/Index', [
             'payments' => $payments,
-            'suppliers' => $suppliers,
-            'filters' => $request->only(['search', 'supplier_id']),
+            'filters' => $request->only(['search', 'date_from', 'date_to'])
         ]);
     }
 
-    public function create(Request $request): Response
+    /**
+     * Show the form for creating a new supplier payment
+     */
+    public function create()
     {
-        $suppliers = Supplier::where('is_active', true)->orderBy('name')->get();
-        $currencies = Currency::where('is_active', true)->get();
+        return Inertia::render('Payment/SupplierPayment/Create', [
+            'suppliers' => \App\Models\Supplier::select('id', 'name', 'due_amount')->get(),
+            'currencies' => Currency::all(),
+            'purchases' => \App\Models\Purchase::with('supplier')
+                ->where('due_amount', '>', 0)
+                ->get(),
+            'paymentMethods' => ['نەقد', 'کارتی بانکی', 'چێک', 'هاوردە']
+        ]);
+    }
 
-        $purchases = [];
-        if ($request->supplier_id) {
-            $purchases = Purchase::where('supplier_id', $request->supplier_id)
-                ->whereIn('payment_status', ['unpaid', 'partial'])
-                ->with(['items.currency'])
-                ->orderByDesc('purchase_date')
-                ->get()
-                ->map(function ($purchase) {
-                    return [
-                        'id' => $purchase->id,
-                        'purchase_number' => $purchase->purchase_number,
-                        'purchase_date' => $purchase->purchase_date,
-                        'remaining_debt' => $purchase->remainingDebt(),
-                    ];
-                });
-        }
+    /**
+     * Show the form for creating a payment for a specific purchase
+     */
+    public function createForPurchase(Purchase $purchase)
+    {
+        $purchase->load(['supplier', 'items.currency']);
 
         return Inertia::render('Payment/SupplierPayment/Create', [
-            'suppliers' => $suppliers,
-            'currencies' => $currencies,
-            'purchases' => $purchases,
-            'selectedSupplierId' => $request->supplier_id,
+            'suppliers' => \App\Models\Supplier::select('id', 'name', 'due_amount')->get(),
+            'currencies' => Currency::all(),
+            'purchases' => \App\Models\Purchase::where('supplier_id', $purchase->supplier_id)
+                ->where('due_amount', '>', 0)
+                ->get(),
+            'paymentMethods' => ['نەقد', 'کارتی بانکی', 'چێک', 'هاوردە'],
+            'preselectedPurchase' => $purchase,
+            'preselectedSupplier' => $purchase->supplier
         ]);
     }
 
+    /**
+     * Store a newly created supplier payment
+     */
     public function store(Request $request)
     {
         $validated = $request->validate([
             'supplier_id' => 'required|exists:suppliers,id',
-            'purchase_id' => 'required|exists:purchases,id',
-            'amount' => 'required|numeric|min:0.1',
+            'purchase_id' => 'nullable|exists:purchases,id',
+            'amount' => 'required|numeric|min:0',
             'currency_id' => 'required|exists:currencies,id',
-            'payment_date' => 'required|date',
-            'notes' => 'nullable|string',
+            'paid_at' => 'required|date',
+            'payment_method' => 'nullable|string',
+            'note' => 'nullable|string'
         ]);
 
-        // Verify purchase belongs to supplier
-        $purchase = Purchase::findOrFail($validated['purchase_id']);
-        if ($purchase->supplier_id != $validated['supplier_id']) {
-            return back()->withErrors(['purchase_id' => 'This purchase does not belong to the selected supplier.']);
+        $validated['created_by_id'] = auth()->id();
+
+        $payment = SupplierPayment::create($validated);
+
+        // Update purchase paid amount if linked to specific purchase
+        if ($payment->purchase_id) {
+            $this->updatePurchaseBalance($payment->purchase_id);
         }
 
-        SupplierPayment::create([
-            'supplier_id' => $validated['supplier_id'],
-            'purchase_id' => $validated['purchase_id'],
-            'amount' => $validated['amount'],
-            'currency_id' => $validated['currency_id'],
-            'payment_date' => $validated['payment_date'],
-            'notes' => $validated['notes'] ?? null,
-            'created_by' => auth()->id(),
-        ]);
+        // Update supplier balance
+        $this->updateSupplierBalance($payment->supplier_id);
+
+        if ($request->has('redirect_to_purchase') && $payment->purchase_id) {
+            return redirect()->route('purchases.show', $payment->purchase_id)
+                ->with('success', 'پارەدان بە سەرکەوتوویی زیادکرا');
+        }
 
         return redirect()->route('supplier-payments.index')
-            ->with('success', 'Payment recorded successfully.');
+            ->with('success', 'پارەدان بە سەرکەوتوویی زیادکرا');
     }
 
-    public function show(SupplierPayment $supplierPayment): Response
+    /**
+     * Display the specified supplier payment
+     */
+    public function show(SupplierPayment $supplierPayment)
     {
-        $supplierPayment->load(['supplier', 'purchase.items.currency', 'currency', 'createdBy']);
+        $supplierPayment->load([
+            'supplier',
+            'currency',
+            'purchase',
+            'created_by'
+        ]);
 
         return Inertia::render('Payment/SupplierPayment/Show', [
-            'payment' => $supplierPayment,
+            'payment' => $supplierPayment
         ]);
     }
 
-    public function edit(SupplierPayment $supplierPayment): Response
+    /**
+     * Show the form for editing the specified supplier payment
+     */
+    public function edit(SupplierPayment $supplierPayment)
     {
-        $supplierPayment->load(['supplier', 'purchase']);
-        $currencies = Currency::where('is_active', true)->get();
-
         return Inertia::render('Payment/SupplierPayment/Edit', [
             'payment' => $supplierPayment,
-            'currencies' => $currencies,
+            'suppliers' => \App\Models\Supplier::select('id', 'name', 'due_amount')->get(),
+            'currencies' => Currency::all(),
+            'purchases' => \App\Models\Purchase::where('supplier_id', $supplierPayment->supplier_id)
+                ->where('due_amount', '>', 0)
+                ->orWhere('id', $supplierPayment->purchase_id)
+                ->get(),
+            'paymentMethods' => ['نەقد', 'کارتی بانکی', 'چێک', 'هاوردە']
         ]);
     }
 
+    /**
+     * Update the specified supplier payment
+     */
     public function update(Request $request, SupplierPayment $supplierPayment)
     {
         $validated = $request->validate([
-            'amount' => 'required|numeric|min:0.1',
+            'supplier_id' => 'required|exists:suppliers,id',
+            'purchase_id' => 'nullable|exists:purchases,id',
+            'amount' => 'required|numeric|min:0',
             'currency_id' => 'required|exists:currencies,id',
-            'payment_date' => 'required|date',
-            'notes' => 'nullable|string',
+            'paid_at' => 'required|date',
+            'payment_method' => 'nullable|string',
+            'note' => 'nullable|string'
         ]);
+
+        $oldPurchaseId = $supplierPayment->purchase_id;
+        $oldSupplierId = $supplierPayment->supplier_id;
 
         $supplierPayment->update($validated);
 
-        return redirect()->route('supplier-payments.index')
-            ->with('success', 'Payment updated successfully.');
+        // Update balances for old and new purchases if changed
+        if ($oldPurchaseId != $supplierPayment->purchase_id) {
+            if ($oldPurchaseId) {
+                $this->updatePurchaseBalance($oldPurchaseId);
+            }
+            if ($supplierPayment->purchase_id) {
+                $this->updatePurchaseBalance($supplierPayment->purchase_id);
+            }
+        } else if ($supplierPayment->purchase_id) {
+            $this->updatePurchaseBalance($supplierPayment->purchase_id);
+        }
+
+        // Update supplier balances
+        if ($oldSupplierId != $supplierPayment->supplier_id) {
+            $this->updateSupplierBalance($oldSupplierId);
+            $this->updateSupplierBalance($supplierPayment->supplier_id);
+        } else {
+            $this->updateSupplierBalance($supplierPayment->supplier_id);
+        }
+
+        return redirect()->route('supplier-payments.show', $supplierPayment)
+            ->with('success', 'پارەدان بە سەرکەوتوویی نوێکرایەوە');
     }
 
+    /**
+     * Remove the specified supplier payment
+     */
     public function destroy(SupplierPayment $supplierPayment)
     {
+        $purchaseId = $supplierPayment->purchase_id;
+        $supplierId = $supplierPayment->supplier_id;
+
         $supplierPayment->delete();
 
+        // Update balances
+        if ($purchaseId) {
+            $this->updatePurchaseBalance($purchaseId);
+        }
+        $this->updateSupplierBalance($supplierId);
+
         return redirect()->route('supplier-payments.index')
-            ->with('success', 'Payment deleted successfully.');
+            ->with('success', 'پارەدان بە سەرکەوتوویی سڕایەوە');
     }
 
-    // Get unpaid purchases for a supplier (AJAX endpoint)
-    public function getUnpaidPurchases(Request $request)
+    /**
+     * Get all payments for a specific supplier
+     */
+    public function supplierPayments(\App\Models\Supplier $supplier)
     {
-        $supplierId = $request->supplier_id;
+        $payments = SupplierPayment::where('supplier_id', $supplier->id)
+            ->with(['currency', 'purchase'])
+            ->orderBy('paid_at', 'desc')
+            ->paginate(20);
 
-        $purchases = Purchase::where('supplier_id', $supplierId)
-            ->whereIn('payment_status', ['unpaid', 'partial'])
-            ->with(['items.currency'])
-            ->orderByDesc('purchase_date')
-            ->get()
-            ->map(function ($purchase) {
-                return [
-                    'id' => $purchase->id,
-                    'purchase_number' => $purchase->purchase_number,
-                    'purchase_date' => $purchase->purchase_date->format('Y-m-d'),
-                    'remaining_debt' => $purchase->remainingDebt(),
-                ];
-            });
+        return Inertia::render('Payment/SupplierPayment/Index', [
+            'payments' => $payments,
+            'supplier' => $supplier,
+            'filters' => ['supplier_id' => $supplier->id]
+        ]);
+    }
 
-        return response()->json($purchases);
+    /**
+     * Update purchase balance based on payments
+     */
+    private function updatePurchaseBalance($purchaseId)
+    {
+        $purchase = Purchase::findOrFail($purchaseId);
+        $totalPaid = SupplierPayment::where('purchase_id', $purchaseId)->sum('amount');
+
+        $purchase->update([
+            'paid_amount' => $totalPaid,
+            'due_amount' => $purchase->total - $totalPaid
+        ]);
+    }
+
+    /**
+     * Update supplier balance based on all their purchases and payments
+     */
+    private function updateSupplierBalance($supplierId)
+    {
+        $supplier = \App\Models\Supplier::findOrFail($supplierId);
+
+        $totalPurchases = Purchase::where('supplier_id', $supplierId)->sum('total');
+        $totalPaid = SupplierPayment::where('supplier_id', $supplierId)->sum('amount');
+
+        $supplier->update([
+            'due_amount' => $totalPurchases - $totalPaid
+        ]);
     }
 }

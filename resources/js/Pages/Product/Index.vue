@@ -38,7 +38,7 @@ watch(
         </div>
         <div class="border border-gray-200 rounded-md mt-4 p-4">
             <div class="overflow-x-auto">
-                <table class="mt-2">
+                <table>
                     <thead>
                     <tr>
                         <th>ID</th>
